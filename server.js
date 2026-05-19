@@ -28,7 +28,15 @@ let activeToken = {
 // ============================================
 
 const attendanceLog = [];
+
+// DEVICE -> USER
 const devices = {};
+
+// USER -> DEVICE
+const users = {};
+
+// DEVICE SCAN COUNTS
+const scanCounts = {};
 
 // ============================================
 // GENERATE NEW TOKEN EVERY 10 SECONDS
@@ -38,7 +46,7 @@ function rotateToken() {
 
   activeToken = {
     token: crypto.randomUUID(),
-    expires: Date.now() + 10000
+    expires: Date.now() + 35000
   };
 
   console.log('--------------------------------');
@@ -46,7 +54,7 @@ function rotateToken() {
   console.log('EXPIRES:', new Date(activeToken.expires));
   console.log('--------------------------------');
 
-  setTimeout(rotateToken, 10000);
+  setTimeout(rotateToken, 35000);
 }
 
 rotateToken();
@@ -73,7 +81,22 @@ app.get('/api/token', (req, res) => {
 app.post('/api/checkin', (req, res) => {
 
   const { token, deviceId, userId } = req.body;
+// ============================================
+// SCAN LIMIT
+// ============================================
 
+if (!scanCounts[deviceId]) {
+  scanCounts[deviceId] = 0;
+}
+
+if (scanCounts[deviceId] >= 2) {
+
+  return res.json({
+    ok: false,
+    reason: 'scan_limit'
+  });
+
+}
   // TOKEN VALIDATION
   if (
     token !== activeToken.token ||
@@ -89,7 +112,22 @@ app.post('/api/checkin', (req, res) => {
 
   // EXISTING DEVICE
   const existingUser = devices[deviceId];
+// ============================================
+// USER ALREADY REGISTERED TO ANOTHER DEVICE
+// ============================================
 
+if (
+  userId &&
+  users[userId] &&
+  users[userId] !== deviceId
+) {
+
+  return res.json({
+    ok: false,
+    reason: 'user_taken'
+  });
+
+}
   // USE EXISTING USER IF DEVICE KNOWN
   const finalUser = existingUser || userId;
 
@@ -105,19 +143,38 @@ app.post('/api/checkin', (req, res) => {
 
   // REGISTER DEVICE
   if (!existingUser) {
-    devices[deviceId] = userId;
-  }
+
+  devices[deviceId] = userId;
+
+  users[userId] = deviceId;
+
+}
 
   // SAVE LOG
-  const entry = {
-    userId: finalUser,
-    deviceId,
-    time: new Date(),
-    type: existingUser ? 'returning' : 'new'
-  };
+const now = new Date();
 
+const entry = {
+
+  userId: finalUser,
+
+  deviceId,
+
+  time: now,
+
+  date:
+    now.toLocaleDateString(),
+
+  fullTime:
+    now.toLocaleString(),
+
+  type:
+    existingUser
+      ? 'returning'
+      : 'new'
+
+};
   attendanceLog.push(entry);
-
+scanCounts[deviceId]++;
   console.log('CHECK-IN:', entry);
 
   // SUCCESS
@@ -138,7 +195,24 @@ app.get('/api/log', (req, res) => {
   res.json(attendanceLog);
 
 });
+// ============================================
+// FORCE RESET TOKEN
+// ============================================
 
+app.post('/api/reset-token', (req,res)=>{
+
+  activeToken = {
+    token: crypto.randomUUID(),
+    expires: Date.now() + 35000
+  };
+
+  console.log('TOKEN FORCE RESET');
+
+  res.json({
+    ok:true
+  });
+
+});
 // ============================================
 // START SERVER
 // ============================================
