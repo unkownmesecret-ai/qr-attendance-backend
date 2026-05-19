@@ -38,7 +38,7 @@ function rotateToken() {
 
   activeToken = {
     token: crypto.randomUUID(),
-    expires: Date.now() + 10000
+    expires: Date.now() + 35000
   };
 
   console.log('--------------------------------');
@@ -46,7 +46,7 @@ function rotateToken() {
   console.log('EXPIRES:', new Date(activeToken.expires));
   console.log('--------------------------------');
 
-  setTimeout(rotateToken, 10000);
+  setTimeout(rotateToken, 35000);
 }
 
 rotateToken();
