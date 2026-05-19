@@ -1,9 +1,11 @@
 const { createClient } =
 require('@supabase/supabase-js');
+
 const supabase = createClient(
   'https://ineujzimrapgjcpbtdue.supabase.co',
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZXVqemltcmFwZ2pjcGJ0ZHVlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTIwODgxNSwiZXhwIjoyMDk0Nzg0ODE1fQ.56lseaP69aWd99Bar_FBVEk4SMVePmadTng0RhE8M60'
 );
+
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -30,22 +32,7 @@ let activeToken = {
 };
 
 // ============================================
-// TEMP DATABASE (MEMORY)
-// ============================================
-
-const attendanceLog = [];
-
-// DEVICE -> USER
-const devices = {};
-
-// USER -> DEVICE
-const users = {};
-
-// DEVICE SCAN COUNTS
-const scanCounts = {};
-
-// ============================================
-// GENERATE NEW TOKEN EVERY 10 SECONDS
+// TOKEN ROTATION
 // ============================================
 
 function rotateToken() {
@@ -57,25 +44,33 @@ function rotateToken() {
 
   console.log('--------------------------------');
   console.log('NEW TOKEN:', activeToken.token);
-  console.log('EXPIRES:', new Date(activeToken.expires));
+  console.log(
+    'EXPIRES:',
+    new Date(activeToken.expires)
+  );
   console.log('--------------------------------');
 
   setTimeout(rotateToken, 35000);
+
 }
 
 rotateToken();
 
 // ============================================
-// GET CURRENT TOKEN
+// GET TOKEN
 // ============================================
 
 app.get('/api/token', (req, res) => {
 
   res.json({
+
     token: activeToken.token,
+
     expires: activeToken.expires,
+
     url:
-      `https://qr-attendance-frontend2.vercel.app/?scan=1&t=${activeToken.token}`
+`https://qr-attendance-frontend2.vercel.app/?scan=1&t=${activeToken.token}`
+
   });
 
 });
@@ -86,123 +81,269 @@ app.get('/api/token', (req, res) => {
 
 app.post('/api/checkin', async (req, res) => {
 
-  console.log('CHECKIN REQUEST:', req.body);
+  console.log(
+    'CHECKIN REQUEST:',
+    req.body
+  );
 
-  const { token, deviceId, userId } = req.body;
-// ============================================
-// SCAN LIMIT
-// ============================================
+  const {
+    token,
+    deviceId,
+    userId
+  } = req.body;
 
-if (!scanCounts[deviceId]) {
-  scanCounts[deviceId] = 0;
-}
-
-if (scanCounts[deviceId] >= 2) {
-
-  return res.json({
-    ok: false,
-    reason: 'scan_limit'
-  });
-
-}
+  // ============================================
   // TOKEN VALIDATION
+  // ============================================
+
   if (
     token !== activeToken.token ||
     Date.now() > activeToken.expires
   ) {
 
     return res.json({
-      ok: false,
-      reason: 'expired'
+      ok:false,
+      reason:'expired'
     });
 
   }
 
-  // EXISTING DEVICE
-  const existingUser = devices[deviceId];
-// ============================================
-// USER ALREADY REGISTERED TO ANOTHER DEVICE
-// ============================================
+  // ============================================
+  // FIND DEVICE
+  // ============================================
 
-if (
-  userId &&
-  users[userId] &&
-  users[userId] !== deviceId
-) {
+  const {
+    data: existingDevice,
+    error: deviceError
+  } = await supabase
+    .from('devices')
+    .select('*')
+    .eq('deviceId', deviceId)
+    .single();
 
-  return res.json({
-    ok: false,
-    reason: 'user_taken'
-  });
+  if (deviceError &&
+      deviceError.code !== 'PGRST116') {
 
-}
-  // USE EXISTING USER IF DEVICE KNOWN
-  const finalUser = existingUser || userId;
+    console.log(
+      'DEVICE LOOKUP ERROR:',
+      deviceError
+    );
 
-  // FIRST TIME USER WITHOUT ID
-  if (!finalUser) {
+  }
+
+  // ============================================
+  // EXISTING USER FOR DEVICE
+  // ============================================
+
+  const existingUser =
+    existingDevice?.userId;
+
+  // ============================================
+  // FIRST SCAN WITHOUT USER ID
+  // ============================================
+
+  if (!existingUser && !userId) {
 
     return res.json({
-      ok: false,
-      reason: 'need_id'
+      ok:false,
+      reason:'need_id'
     });
 
   }
 
-  // REGISTER DEVICE
-  if (!existingUser) {
+  // ============================================
+  // FINAL USER
+  // ============================================
 
-  devices[deviceId] = userId;
+  const finalUser =
+    existingUser || userId;
 
-  users[userId] = deviceId;
+  // ============================================
+  // PREVENT USER ON ANOTHER DEVICE
+  // ============================================
 
-}
+  const {
+    data: sameUser
+  } = await supabase
+    .from('devices')
+    .select('*')
+    .eq('userId', finalUser)
+    .single();
 
-  // SAVE LOG
-const now = new Date();
+  if (
+    sameUser &&
+    sameUser.deviceId !== deviceId
+  ) {
 
-const entry = {
+    return res.json({
+      ok:false,
+      reason:'user_taken'
+    });
 
-  userId: finalUser,
+  }
 
-  deviceId,
-  
-  date:
-    now.toLocaleDateString(),
+  // ============================================
+  // SCAN LIMIT
+  // ============================================
 
-  fullTime:
-    now.toLocaleString(),
+  if (
+    existingDevice &&
+    existingDevice.scanCount >= 2
+  ) {
 
-  type:
-    existingUser
-      ? 'returning'
-      : 'new'
+    return res.json({
+      ok:false,
+      reason:'scan_limit'
+    });
 
-};
- const { data, error } =
-  await supabase
+  }
+
+  // ============================================
+  // PREVENT DUPLICATE ATTENDANCE
+  // ============================================
+
+  const today =
+    new Date().toLocaleDateString();
+
+  const {
+    data: alreadyScanned
+  } = await supabase
+    .from('attendance')
+    .select('*')
+    .eq('userId', finalUser)
+    .eq('date', today)
+    .limit(1);
+
+  if (
+    alreadyScanned &&
+    alreadyScanned.length > 0
+  ) {
+
+    return res.json({
+      ok:false,
+      reason:'already_scanned'
+    });
+
+  }
+
+  // ============================================
+  // SAVE OR UPDATE DEVICE
+  // ============================================
+
+  if (!existingDevice) {
+
+    const {
+      error: insertDeviceError
+    } = await supabase
+      .from('devices')
+      .insert([{
+
+        deviceId,
+        userId: finalUser,
+        scanCount:1
+
+      }]);
+
+    if(insertDeviceError){
+
+      console.log(
+        'DEVICE INSERT ERROR:',
+        insertDeviceError
+      );
+
+    }
+
+  } else {
+
+    const {
+      error: updateError
+    } = await supabase
+      .from('devices')
+      .update({
+
+        scanCount:
+          existingDevice.scanCount + 1
+
+      })
+      .eq('deviceId', deviceId);
+
+    if(updateError){
+
+      console.log(
+        'DEVICE UPDATE ERROR:',
+        updateError
+      );
+
+    }
+
+  }
+
+  // ============================================
+  // CREATE ATTENDANCE ENTRY
+  // ============================================
+
+  const now = new Date();
+
+  const entry = {
+
+    userId: finalUser,
+
+    deviceId,
+
+    date:
+      now.toLocaleDateString(),
+
+    fullTime:
+      now.toLocaleString(),
+
+    type:
+      existingUser
+        ? 'returning'
+        : 'new'
+
+  };
+
+  // ============================================
+  // SAVE ATTENDANCE
+  // ============================================
+
+  const {
+    data,
+    error
+  } = await supabase
     .from('attendance')
     .insert([entry]);
 
-console.log('ENTRY:', entry);
+  console.log('ENTRY:', entry);
 
-console.log('INSERT DATA:', data);
+  console.log('INSERT DATA:', data);
 
-console.log('INSERT ERROR:', error);
+  console.log('INSERT ERROR:', error);
 
-if(error){
+  if(error){
 
-  return res.json({
-    ok:false,
-    reason:'db_error'
-  });
+    return res.json({
+      ok:false,
+      reason:'db_error'
+    });
 
-}
+  }
+
+  // ============================================
   // SUCCESS
+  // ============================================
+
   res.json({
-    ok: true,
+
+    ok:true,
+
     userId: finalUser,
-    type: existingUser ? 'returning' : 'new'
+
+    type:
+      existingUser
+        ? 'returning'
+        : 'new'
+
   });
 
 });
@@ -213,15 +354,22 @@ if(error){
 
 app.get('/api/log', async (req, res) => {
 
-  const { data, error } =
-    await supabase
-      .from('attendance')
-      .select('*')
-      .order('id', { ascending:false });
+  const {
+    data,
+    error
+  } = await supabase
+    .from('attendance')
+    .select('*')
+    .order('id', {
+      ascending:false
+    });
 
   if(error){
 
-    console.log('SUPABASE ERROR:', error);
+    console.log(
+      'SUPABASE ERROR:',
+      error
+    );
 
     return res.json([]);
 
@@ -230,6 +378,7 @@ app.get('/api/log', async (req, res) => {
   res.json(data);
 
 });
+
 // ============================================
 // FORCE RESET TOKEN
 // ============================================
@@ -237,17 +386,25 @@ app.get('/api/log', async (req, res) => {
 app.post('/api/reset-token', (req,res)=>{
 
   activeToken = {
-    token: crypto.randomUUID(),
-    expires: Date.now() + 35000
+
+    token:
+      crypto.randomUUID(),
+
+    expires:
+      Date.now() + 35000
+
   };
 
-  console.log('TOKEN FORCE RESET');
+  console.log(
+    'TOKEN FORCE RESET'
+  );
 
   res.json({
     ok:true
   });
 
 });
+
 // ============================================
 // START SERVER
 // ============================================
@@ -255,9 +412,18 @@ app.post('/api/reset-token', (req,res)=>{
 app.listen(PORT, () => {
 
   console.log('');
-  console.log('====================================');
-  console.log(`Server running on port ${PORT}`);
-  console.log('====================================');
+  console.log(
+    '===================================='
+  );
+
+  console.log(
+    `Server running on port ${PORT}`
+  );
+
+  console.log(
+    '===================================='
+  );
+
   console.log('');
 
 });
