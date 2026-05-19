@@ -164,9 +164,7 @@ const entry = {
   userId: finalUser,
 
   deviceId,
-
-  time: now,
-
+  
   date:
     now.toLocaleDateString(),
 
@@ -198,16 +196,17 @@ const entry = {
 app.get('/api/log', async (req, res) => {
 
   const { data, error } =
-    await supabase
-      .from('attendance')
-      .select('*')
-      .order('id', { ascending:false });
+  await supabase
+    .from('attendance')
+    .insert([entry]);
 
-  if(error){
+console.log('SUPABASE INSERT:', data);
 
-    return res.json([]);
+if(error){
 
-  }
+  console.log('SUPABASE ERROR:', error);
+
+}
 
   res.json(data);
 
