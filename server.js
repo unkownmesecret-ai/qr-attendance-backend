@@ -60,10 +60,9 @@ app.get('/api/token', (req, res) => {
   res.json({
     token: activeToken.token,
     expires: activeToken.expires,
-
-    // CHANGE THIS TO YOUR LOCAL IP
     url:
-`https://qr-attendance-frontend2.vercel.app/?scan=1&t=${activeToken.token}`  });
+      `https://qr-attendance-frontend2.vercel.app/?scan=1&t=${activeToken.token}`
+  });
 
 });
 
