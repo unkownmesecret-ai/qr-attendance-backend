@@ -196,17 +196,18 @@ const entry = {
 app.get('/api/log', async (req, res) => {
 
   const { data, error } =
-  await supabase
-    .from('attendance')
-    .insert([entry]);
+    await supabase
+      .from('attendance')
+      .select('*')
+      .order('id', { ascending:false });
 
-console.log('SUPABASE INSERT:', data);
+  if(error){
 
-if(error){
+    console.log('SUPABASE ERROR:', error);
 
-  console.log('SUPABASE ERROR:', error);
+    return res.json([]);
 
-}
+  }
 
   res.json(data);
 
