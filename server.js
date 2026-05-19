@@ -1,3 +1,9 @@
+const { createClient } =
+require('@supabase/supabase-js');
+const supabase = createClient(
+  'YOUR_SUPABASE_URL',
+  'YOUR_SUPABASE_ANON_KEY'
+);
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -173,10 +179,9 @@ const entry = {
       : 'new'
 
 };
-  attendanceLog.push(entry);
-scanCounts[deviceId]++;
-  console.log('CHECK-IN:', entry);
-
+ await supabase
+  .from('attendance')
+  .insert([entry]);
   // SUCCESS
   res.json({
     ok: true,
@@ -190,9 +195,21 @@ scanCounts[deviceId]++;
 // GET LOG
 // ============================================
 
-app.get('/api/log', (req, res) => {
+app.get('/api/log', async (req, res) => {
 
-  res.json(attendanceLog);
+  const { data, error } =
+    await supabase
+      .from('attendance')
+      .select('*')
+      .order('id', { ascending:false });
+
+  if(error){
+
+    return res.json([]);
+
+  }
+
+  res.json(data);
 
 });
 // ============================================
