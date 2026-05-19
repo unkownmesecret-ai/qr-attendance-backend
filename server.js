@@ -2,7 +2,7 @@ const { createClient } =
 require('@supabase/supabase-js');
 const supabase = createClient(
   'https://ineujzimrapgjcpbtdue.supabase.co',
-  'sb_publishable_xI8ZmcJ9yPvL173Cso2Ncg_stHHtgk0'
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImluZXVqemltcmFwZ2pjcGJ0ZHVlIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3OTIwODgxNSwiZXhwIjoyMDk0Nzg0ODE1fQ.56lseaP69aWd99Bar_FBVEk4SMVePmadTng0RhE8M60'
 );
 const express = require('express');
 const cors = require('cors');
