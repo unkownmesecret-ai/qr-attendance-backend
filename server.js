@@ -86,6 +86,8 @@ app.get('/api/token', (req, res) => {
 
 app.post('/api/checkin', async (req, res) => {
 
+  console.log('CHECKIN REQUEST:', req.body);
+
   const { token, deviceId, userId } = req.body;
 // ============================================
 // SCAN LIMIT
