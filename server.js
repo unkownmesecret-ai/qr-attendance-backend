@@ -9,6 +9,7 @@ const supabase = createClient(
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+
 require('dotenv').config();
 
 const app = express();
@@ -22,8 +23,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
+const QR_LIFETIME = 35000;
+
+const COOLDOWN_HOURS = 1;
+
 // ============================================
-// ACTIVE QR TOKEN
+// ACTIVE TOKEN
 // ============================================
 
 let activeToken = {
@@ -35,22 +40,36 @@ let activeToken = {
 // TOKEN ROTATION
 // ============================================
 
-function rotateToken() {
+function rotateToken(){
 
   activeToken = {
-    token: crypto.randomUUID(),
-    expires: Date.now() + 35000
+
+    token:
+      crypto.randomUUID(),
+
+    expires:
+      Date.now() + QR_LIFETIME
+
   };
 
   console.log('--------------------------------');
-  console.log('NEW TOKEN:', activeToken.token);
+
+  console.log(
+    'NEW TOKEN:',
+    activeToken.token
+  );
+
   console.log(
     'EXPIRES:',
     new Date(activeToken.expires)
   );
+
   console.log('--------------------------------');
 
-  setTimeout(rotateToken, 35000);
+  setTimeout(
+    rotateToken,
+    QR_LIFETIME
+  );
 
 }
 
@@ -60,13 +79,15 @@ rotateToken();
 // GET TOKEN
 // ============================================
 
-app.get('/api/token', (req, res) => {
+app.get('/api/token', (req,res)=>{
 
   res.json({
 
-    token: activeToken.token,
+    token:
+      activeToken.token,
 
-    expires: activeToken.expires,
+    expires:
+      activeToken.expires,
 
     url:
 `https://qr-attendance-frontend2.vercel.app/?scan=1&t=${activeToken.token}`
@@ -76,10 +97,10 @@ app.get('/api/token', (req, res) => {
 });
 
 // ============================================
-// CHECK-IN
+// CHECKIN
 // ============================================
 
-app.post('/api/checkin', async (req, res) => {
+app.post('/api/checkin', async (req,res)=>{
 
   console.log(
     'CHECKIN REQUEST:',
@@ -96,14 +117,16 @@ app.post('/api/checkin', async (req, res) => {
   // TOKEN VALIDATION
   // ============================================
 
-  if (
+  if(
     token !== activeToken.token ||
     Date.now() > activeToken.expires
-  ) {
+  ){
 
     return res.json({
+
       ok:false,
       reason:'expired'
+
     });
 
   }
@@ -113,16 +136,22 @@ app.post('/api/checkin', async (req, res) => {
   // ============================================
 
   const {
-    data: existingDevice,
+    data: device,
     error: deviceError
   } = await supabase
+
     .from('devices')
+
     .select('*')
-    .eq('deviceId', deviceId)
+
+    .eq('deviceid', deviceId)
+
     .single();
 
-  if (deviceError &&
-      deviceError.code !== 'PGRST116') {
+  if(
+    deviceError &&
+    deviceError.code !== 'PGRST116'
+  ){
 
     console.log(
       'DEVICE LOOKUP ERROR:',
@@ -132,21 +161,64 @@ app.post('/api/checkin', async (req, res) => {
   }
 
   // ============================================
-  // EXISTING USER FOR DEVICE
+  // BLOCKED DEVICE
+  // ============================================
+
+  if(device?.is_blocked){
+
+    return res.json({
+
+      ok:false,
+      reason:'blocked'
+
+    });
+
+  }
+
+  // ============================================
+  // COOLDOWN CHECK
+  // ============================================
+
+  if(
+    device?.cooldown_until &&
+    Date.now() <
+      new Date(device.cooldown_until)
+  ){
+
+    return res.json({
+
+      ok:false,
+
+      reason:'cooldown',
+
+      until:
+        device.cooldown_until
+
+    });
+
+  }
+
+  // ============================================
+  // EXISTING USER
   // ============================================
 
   const existingUser =
-    existingDevice?.userId;
+    device?.userid;
 
   // ============================================
-  // FIRST SCAN WITHOUT USER ID
+  // NEED USER ID
   // ============================================
 
-  if (!existingUser && !userId) {
+  if(
+    !existingUser &&
+    !userId
+  ){
 
     return res.json({
+
       ok:false,
       reason:'need_id'
+
     });
 
   }
@@ -159,25 +231,32 @@ app.post('/api/checkin', async (req, res) => {
     existingUser || userId;
 
   // ============================================
-  // PREVENT USER ON ANOTHER DEVICE
+  // PREVENT SAME USER
+  // ON DIFFERENT DEVICE
   // ============================================
 
   const {
     data: sameUser
   } = await supabase
+
     .from('devices')
+
     .select('*')
-    .eq('userId', finalUser)
+
+    .eq('userid', finalUser)
+
     .single();
 
-  if (
+  if(
     sameUser &&
-    sameUser.deviceId !== deviceId
-  ) {
+    sameUser.deviceid !== deviceId
+  ){
 
     return res.json({
+
       ok:false,
       reason:'user_taken'
+
     });
 
   }
@@ -186,86 +265,148 @@ app.post('/api/checkin', async (req, res) => {
   // SCAN LIMIT
   // ============================================
 
-  if (
-    existingDevice &&
-    existingDevice.scanCount >= 2
-  ) {
+  if(
+    device &&
+    device.scan_count >=
+    device.max_scans
+  ){
+
+    const cooldown =
+      new Date(
+        Date.now() +
+        COOLDOWN_HOURS *
+        60 *
+        60 *
+        1000
+      );
+
+    await supabase
+
+      .from('devices')
+
+      .update({
+
+        cooldown_until:
+          cooldown
+
+      })
+
+      .eq(
+        'deviceid',
+        deviceId
+      );
 
     return res.json({
+
       ok:false,
-      reason:'scan_limit'
+
+      reason:'cooldown',
+
+      until: cooldown
+
     });
 
   }
 
   // ============================================
-  // PREVENT DUPLICATE ATTENDANCE
+  // PREVENT DUPLICATE
+  // SAME DAY
   // ============================================
 
   const today =
-    new Date().toLocaleDateString();
+    new Date()
+      .toLocaleDateString();
 
   const {
     data: alreadyScanned
   } = await supabase
+
     .from('attendance')
+
     .select('*')
-    .eq('userId', finalUser)
+
+    .eq('userid', finalUser)
+
     .eq('date', today)
+
     .limit(1);
 
-  if (
+  if(
     alreadyScanned &&
     alreadyScanned.length > 0
-  ) {
+  ){
 
     return res.json({
+
       ok:false,
       reason:'already_scanned'
+
     });
 
   }
 
   // ============================================
-  // SAVE OR UPDATE DEVICE
+  // CREATE DEVICE
   // ============================================
 
-  if (!existingDevice) {
+  if(!device){
 
     const {
-      error: insertDeviceError
+      error: insertError
     } = await supabase
+
       .from('devices')
+
       .insert([{
 
-        deviceId,
-        userId: finalUser,
-        scanCount:1
+        deviceid:
+          deviceId,
+
+        userid:
+          finalUser,
+
+        scan_count: 1,
+
+        max_scans: 2,
+
+        is_blocked:false
 
       }]);
 
-    if(insertDeviceError){
+    if(insertError){
 
       console.log(
         'DEVICE INSERT ERROR:',
-        insertDeviceError
+        insertError
       );
 
     }
 
-  } else {
+  }
+
+  // ============================================
+  // UPDATE DEVICE
+  // ============================================
+
+  else{
 
     const {
       error: updateError
     } = await supabase
+
       .from('devices')
+
       .update({
 
-        scanCount:
-          existingDevice.scanCount + 1
+        scan_count:
+          device.scan_count + 1
 
       })
-      .eq('deviceId', deviceId);
+
+      .eq(
+        'deviceid',
+        deviceId
+      );
 
     if(updateError){
 
@@ -286,14 +427,16 @@ app.post('/api/checkin', async (req, res) => {
 
   const entry = {
 
-    userId: finalUser,
+    userid:
+      finalUser,
 
-    deviceId,
+    deviceid:
+      deviceId,
 
     date:
       now.toLocaleDateString(),
 
-    fullTime:
+    fulltime:
       now.toLocaleString(),
 
     type:
@@ -311,20 +454,28 @@ app.post('/api/checkin', async (req, res) => {
     data,
     error
   } = await supabase
+
     .from('attendance')
+
     .insert([entry]);
 
-  console.log('ENTRY:', entry);
+  console.log(
+    'ATTENDANCE ENTRY:',
+    entry
+  );
 
-  console.log('INSERT DATA:', data);
-
-  console.log('INSERT ERROR:', error);
+  console.log(
+    'INSERT ERROR:',
+    error
+  );
 
   if(error){
 
     return res.json({
+
       ok:false,
       reason:'db_error'
+
     });
 
   }
@@ -337,7 +488,8 @@ app.post('/api/checkin', async (req, res) => {
 
     ok:true,
 
-    userId: finalUser,
+    userId:
+      finalUser,
 
     type:
       existingUser
@@ -352,14 +504,17 @@ app.post('/api/checkin', async (req, res) => {
 // GET LOG
 // ============================================
 
-app.get('/api/log', async (req, res) => {
+app.get('/api/log', async (req,res)=>{
 
   const {
     data,
     error
   } = await supabase
+
     .from('attendance')
+
     .select('*')
+
     .order('id', {
       ascending:false
     });
@@ -367,7 +522,7 @@ app.get('/api/log', async (req, res) => {
   if(error){
 
     console.log(
-      'SUPABASE ERROR:',
+      'LOG ERROR:',
       error
     );
 
@@ -391,7 +546,7 @@ app.post('/api/reset-token', (req,res)=>{
       crypto.randomUUID(),
 
     expires:
-      Date.now() + 35000
+      Date.now() + QR_LIFETIME
 
   };
 
@@ -400,7 +555,9 @@ app.post('/api/reset-token', (req,res)=>{
   );
 
   res.json({
+
     ok:true
+
   });
 
 });
@@ -409,9 +566,10 @@ app.post('/api/reset-token', (req,res)=>{
 // START SERVER
 // ============================================
 
-app.listen(PORT, () => {
+app.listen(PORT, ()=>{
 
   console.log('');
+
   console.log(
     '===================================='
   );
