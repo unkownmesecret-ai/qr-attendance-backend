@@ -151,13 +151,28 @@ if (
 }
 
   // SAVE LOG
-  const entry = {
-    userId: finalUser,
-    deviceId,
-    time: new Date(),
-    type: existingUser ? 'returning' : 'new'
-  };
+const now = new Date();
 
+const entry = {
+
+  userId: finalUser,
+
+  deviceId,
+
+  time: now,
+
+  date:
+    now.toLocaleDateString(),
+
+  fullTime:
+    now.toLocaleString(),
+
+  type:
+    existingUser
+      ? 'returning'
+      : 'new'
+
+};
   attendanceLog.push(entry);
 scanCounts[deviceId]++;
   console.log('CHECK-IN:', entry);
@@ -180,7 +195,24 @@ app.get('/api/log', (req, res) => {
   res.json(attendanceLog);
 
 });
+// ============================================
+// FORCE RESET TOKEN
+// ============================================
 
+app.post('/api/reset-token', (req,res)=>{
+
+  activeToken = {
+    token: crypto.randomUUID(),
+    expires: Date.now() + 35000
+  };
+
+  console.log('TOKEN FORCE RESET');
+
+  res.json({
+    ok:true
+  });
+
+});
 // ============================================
 // START SERVER
 // ============================================
