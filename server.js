@@ -63,7 +63,7 @@ app.get('/api/token', (req, res) => {
 
     // CHANGE THIS TO YOUR LOCAL IP
     url:
-      `http://localhost:5500/qr-attendance.html?scan=1&t=${activeToken.token}`
+      `https://qr-attendance-frontend2.vercel.app/${activeToken.token}`
   });
 
 });
