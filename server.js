@@ -28,7 +28,15 @@ let activeToken = {
 // ============================================
 
 const attendanceLog = [];
+
+// DEVICE -> USER
 const devices = {};
+
+// USER -> DEVICE
+const users = {};
+
+// DEVICE SCAN COUNTS
+const scanCounts = {};
 
 // ============================================
 // GENERATE NEW TOKEN EVERY 10 SECONDS
@@ -73,7 +81,22 @@ app.get('/api/token', (req, res) => {
 app.post('/api/checkin', (req, res) => {
 
   const { token, deviceId, userId } = req.body;
+// ============================================
+// SCAN LIMIT
+// ============================================
 
+if (!scanCounts[deviceId]) {
+  scanCounts[deviceId] = 0;
+}
+
+if (scanCounts[deviceId] >= 2) {
+
+  return res.json({
+    ok: false,
+    reason: 'scan_limit'
+  });
+
+}
   // TOKEN VALIDATION
   if (
     token !== activeToken.token ||
@@ -89,7 +112,22 @@ app.post('/api/checkin', (req, res) => {
 
   // EXISTING DEVICE
   const existingUser = devices[deviceId];
+// ============================================
+// USER ALREADY REGISTERED TO ANOTHER DEVICE
+// ============================================
 
+if (
+  userId &&
+  users[userId] &&
+  users[userId] !== deviceId
+) {
+
+  return res.json({
+    ok: false,
+    reason: 'user_taken'
+  });
+
+}
   // USE EXISTING USER IF DEVICE KNOWN
   const finalUser = existingUser || userId;
 
@@ -105,8 +143,12 @@ app.post('/api/checkin', (req, res) => {
 
   // REGISTER DEVICE
   if (!existingUser) {
-    devices[deviceId] = userId;
-  }
+
+  devices[deviceId] = userId;
+
+  users[userId] = deviceId;
+
+}
 
   // SAVE LOG
   const entry = {
@@ -117,7 +159,7 @@ app.post('/api/checkin', (req, res) => {
   };
 
   attendanceLog.push(entry);
-
+scanCounts[deviceId]++;
   console.log('CHECK-IN:', entry);
 
   // SUCCESS
