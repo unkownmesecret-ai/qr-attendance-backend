@@ -179,9 +179,25 @@ const entry = {
       : 'new'
 
 };
- await supabase
-  .from('attendance')
-  .insert([entry]);
+ const { data, error } =
+  await supabase
+    .from('attendance')
+    .insert([entry]);
+
+console.log('ENTRY:', entry);
+
+console.log('INSERT DATA:', data);
+
+console.log('INSERT ERROR:', error);
+
+if(error){
+
+  return res.json({
+    ok:false,
+    reason:'db_error'
+  });
+
+}
   // SUCCESS
   res.json({
     ok: true,
