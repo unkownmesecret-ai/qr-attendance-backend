@@ -1,8 +1,8 @@
 const { createClient } =
 require('@supabase/supabase-js');
 const supabase = createClient(
-  'YOUR_SUPABASE_URL',
-  'YOUR_SUPABASE_ANON_KEY'
+  'https://ineujzimrapgjcpbtdue.supabase.co',
+  'sb_publishable_xI8ZmcJ9yPvL173Cso2Ncg_stHHtgk0'
 );
 const express = require('express');
 const cors = require('cors');
@@ -84,7 +84,7 @@ app.get('/api/token', (req, res) => {
 // CHECK-IN
 // ============================================
 
-app.post('/api/checkin', (req, res) => {
+app.post('/api/checkin', async (req, res) => {
 
   const { token, deviceId, userId } = req.body;
 // ============================================
