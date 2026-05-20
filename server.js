@@ -23,15 +23,11 @@ const supabase = createClient(
 
 const PORT = process.env.PORT || 3000;
 const TOKEN_TTL = 35000;
-const COOLDOWN_DURATION = 60 * 60 * 1000; // 1 hour
+const COOLDOWN_DURATION = 60 * 60 * 1000;
 const DEFAULT_MAX_SCANS = 2;
 
 // ============================================
 // IN-FLIGHT LOCK
-// Prevents race conditions when a user spams
-// the submit button before the first request
-// finishes. Keyed by deviceId — only one
-// request per device can be processed at a time.
 // ============================================
 
 const inFlight = new Set();
@@ -83,61 +79,46 @@ app.post('/api/checkin', async (req, res) => {
 
   console.log('[CHECKIN]', { deviceId, userId, tokenMatch: token === activeToken.token });
 
-  // ----- TOKEN VALIDATION -----
   if (!token || token !== activeToken.token || Date.now() > activeToken.expires) {
     return res.json({ ok: false, reason: 'expired' });
   }
 
-  // ----- IN-FLIGHT LOCK -----
-  // If this device already has a request being processed, reject immediately.
   if (inFlight.has(deviceId)) {
     console.log('[LOCKED] duplicate in-flight request blocked for', deviceId);
     return res.json({ ok: false, reason: 'processing' });
   }
   inFlight.add(deviceId);
 
-  // Wrap the rest in try/finally so the lock is ALWAYS released,
-  // even if something throws unexpectedly.
   try {
 
-  // ----- GET DEVICE -----
   const { data: device, error: deviceError } = await supabase
     .from('devices')
     .select('*')
     .eq('deviceid', deviceId)
-    .maybeSingle(); // FIX: use maybeSingle() so missing rows return null cleanly
+    .maybeSingle();
 
   if (deviceError) {
     console.error('[DEVICE LOOKUP ERROR]', deviceError);
     return res.json({ ok: false, reason: 'db_error' });
   }
 
-  console.log('[DEVICE]', device);
-
-  // ----- BLOCKED -----
-  // FIX: Supabase may return is_blocked as the STRING 'true'/'false' if the
-  // column type is text instead of boolean. Coerce both cases safely.
   const isBlocked = device?.is_blocked === true || device?.is_blocked === 'true';
   if (device && isBlocked) {
     return res.json({ ok: false, reason: 'blocked' });
   }
 
-  // ----- COOLDOWN -----
   if (device?.cooldown_until && Date.now() < new Date(device.cooldown_until).getTime()) {
     return res.json({ ok: false, reason: 'cooldown', until: device.cooldown_until });
   }
 
-  // ----- EXISTING USER -----
   const existingUser = device?.userid || null;
 
-  // ----- NEED ID -----
   if (!existingUser && !userId) {
     return res.json({ ok: false, reason: 'need_id' });
   }
 
   const finalUser = existingUser || userId;
 
-  // ----- USER ALREADY BOUND TO ANOTHER DEVICE -----
   const { data: userCheck } = await supabase
     .from('devices')
     .select('*')
@@ -148,11 +129,7 @@ app.post('/api/checkin', async (req, res) => {
     return res.json({ ok: false, reason: 'user_taken' });
   }
 
-  // ----- SCAN LIMIT -----
-  // FIX: Only block if scan_count >= max_scans AND there's no remaining
-  // scan budget. When admin raises max_scans the user should be able to scan again.
   if (device && device.scan_count >= device.max_scans) {
-    // If they're not already in a cooldown, start one now
     if (!device.cooldown_until || Date.now() >= new Date(device.cooldown_until).getTime()) {
       const cooldown = new Date(Date.now() + COOLDOWN_DURATION).toISOString();
       await supabase
@@ -164,9 +141,6 @@ app.post('/api/checkin', async (req, res) => {
     return res.json({ ok: false, reason: 'cooldown', until: device.cooldown_until });
   }
 
-  // ----- DUPLICATE CHECK FOR TODAY -----
-  // FIX: Don't rely on locale string matching. Use a UTC date range so the
-  // comparison is timezone-safe and format-independent.
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date();
@@ -184,7 +158,6 @@ app.post('/api/checkin', async (req, res) => {
     return res.json({ ok: false, reason: 'already_scanned' });
   }
 
-  // ----- SAVE / UPDATE DEVICE -----
   if (!device) {
     const { error: insertError } = await supabase
       .from('devices')
@@ -193,7 +166,7 @@ app.post('/api/checkin', async (req, res) => {
         userid: finalUser,
         scan_count: 1,
         max_scans: DEFAULT_MAX_SCANS,
-        is_blocked: 'false',     // FIX: text column in Supabase
+        is_blocked: 'false',
         cooldown_until: null
       }]);
 
@@ -208,7 +181,6 @@ app.post('/api/checkin', async (req, res) => {
       .eq('deviceid', deviceId);
   }
 
-  // ----- SAVE ATTENDANCE -----
   const now = new Date();
   const entry = {
     userid: finalUser,
@@ -235,7 +207,6 @@ app.post('/api/checkin', async (req, res) => {
     console.error('[CHECKIN UNHANDLED ERROR]', err);
     res.json({ ok: false, reason: 'server_error' });
   } finally {
-    // Always release the lock when done
     inFlight.delete(deviceId);
   }
 });
@@ -256,6 +227,29 @@ app.get('/api/log', async (req, res) => {
   }
 
   res.json(data);
+});
+
+// ============================================
+// DELETE RECORD
+// ============================================
+
+app.post('/api/delete-record', async (req, res) => {
+  const { id } = req.body;
+
+  if (!id) return res.json({ ok: false, reason: 'missing_id' });
+
+  const { error } = await supabase
+    .from('attendance')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('[DELETE RECORD ERROR]', error);
+    return res.json({ ok: false, reason: 'db_error' });
+  }
+
+  console.log('[RECORD DELETED]', id);
+  res.json({ ok: true });
 });
 
 // ============================================
@@ -287,7 +281,7 @@ app.post('/api/block-device', async (req, res) => {
 
   const { error } = await supabase
     .from('devices')
-    .update({ is_blocked: 'true' })   // FIX: column is text type in Supabase
+    .update({ is_blocked: 'true' })
     .eq('deviceid', deviceId);
 
   if (error) {
@@ -310,7 +304,7 @@ app.post('/api/unblock-device', async (req, res) => {
 
   const { error } = await supabase
     .from('devices')
-    .update({ is_blocked: 'false' })  // FIX: column is text type in Supabase
+    .update({ is_blocked: 'false' })
     .eq('deviceid', deviceId);
 
   if (error) {
@@ -359,7 +353,7 @@ app.post('/api/set-max-scans', async (req, res) => {
     .from('devices')
     .update({
       max_scans: Number(maxScans),
-      cooldown_until: null   // FIX: clear any active cooldown when limit is raised
+      cooldown_until: null
     })
     .eq('deviceid', deviceId);
 
