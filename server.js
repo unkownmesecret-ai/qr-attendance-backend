@@ -93,7 +93,10 @@ app.post('/api/checkin', async (req, res) => {
   console.log('[DEVICE]', device);
 
   // ----- BLOCKED -----
-  if (device && device.is_blocked === true) {
+  // FIX: Supabase may return is_blocked as the STRING 'true'/'false' if the
+  // column type is text instead of boolean. Coerce both cases safely.
+  const isBlocked = device?.is_blocked === true || device?.is_blocked === 'true';
+  if (device && isBlocked) {
     return res.json({ ok: false, reason: 'blocked' });
   }
 
@@ -124,25 +127,35 @@ app.post('/api/checkin', async (req, res) => {
   }
 
   // ----- SCAN LIMIT -----
+  // FIX: Only block if scan_count >= max_scans AND there's no remaining
+  // scan budget. When admin raises max_scans the user should be able to scan again.
   if (device && device.scan_count >= device.max_scans) {
-    const cooldown = new Date(Date.now() + COOLDOWN_DURATION).toISOString();
-
-    await supabase
-      .from('devices')
-      .update({ cooldown_until: cooldown })
-      .eq('deviceid', deviceId);
-
-    return res.json({ ok: false, reason: 'cooldown', until: cooldown });
+    // If they're not already in a cooldown, start one now
+    if (!device.cooldown_until || Date.now() >= new Date(device.cooldown_until).getTime()) {
+      const cooldown = new Date(Date.now() + COOLDOWN_DURATION).toISOString();
+      await supabase
+        .from('devices')
+        .update({ cooldown_until: cooldown })
+        .eq('deviceid', deviceId);
+      return res.json({ ok: false, reason: 'cooldown', until: cooldown });
+    }
+    return res.json({ ok: false, reason: 'cooldown', until: device.cooldown_until });
   }
 
   // ----- DUPLICATE CHECK FOR TODAY -----
-  const today = new Date().toLocaleDateString('en-US');
+  // FIX: Don't rely on locale string matching. Use a UTC date range so the
+  // comparison is timezone-safe and format-independent.
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date();
+  endOfDay.setHours(23, 59, 59, 999);
 
   const { data: already } = await supabase
     .from('attendance')
     .select('id')
     .eq('userid', finalUser)
-    .eq('date', today)
+    .gte('created_at', startOfDay.toISOString())
+    .lte('created_at', endOfDay.toISOString())
     .limit(1);
 
   if (already && already.length > 0) {
@@ -158,7 +171,7 @@ app.post('/api/checkin', async (req, res) => {
         userid: finalUser,
         scan_count: 1,
         max_scans: DEFAULT_MAX_SCANS,
-        is_blocked: false,       // FIX: always explicit
+        is_blocked: 'false',     // FIX: text column in Supabase
         cooldown_until: null
       }]);
 
@@ -244,7 +257,7 @@ app.post('/api/block-device', async (req, res) => {
 
   const { error } = await supabase
     .from('devices')
-    .update({ is_blocked: true })
+    .update({ is_blocked: 'true' })   // FIX: column is text type in Supabase
     .eq('deviceid', deviceId);
 
   if (error) {
@@ -267,7 +280,7 @@ app.post('/api/unblock-device', async (req, res) => {
 
   const { error } = await supabase
     .from('devices')
-    .update({ is_blocked: false })
+    .update({ is_blocked: 'false' })  // FIX: column is text type in Supabase
     .eq('deviceid', deviceId);
 
   if (error) {
@@ -314,7 +327,10 @@ app.post('/api/set-max-scans', async (req, res) => {
 
   const { error } = await supabase
     .from('devices')
-    .update({ max_scans: Number(maxScans) })
+    .update({
+      max_scans: Number(maxScans),
+      cooldown_until: null   // FIX: clear any active cooldown when limit is raised
+    })
     .eq('deviceid', deviceId);
 
   if (error) {
