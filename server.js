@@ -27,6 +27,16 @@ const COOLDOWN_DURATION = 60 * 60 * 1000; // 1 hour
 const DEFAULT_MAX_SCANS = 2;
 
 // ============================================
+// IN-FLIGHT LOCK
+// Prevents race conditions when a user spams
+// the submit button before the first request
+// finishes. Keyed by deviceId — only one
+// request per device can be processed at a time.
+// ============================================
+
+const inFlight = new Set();
+
+// ============================================
 // ACTIVE TOKEN
 // ============================================
 
@@ -77,6 +87,18 @@ app.post('/api/checkin', async (req, res) => {
   if (!token || token !== activeToken.token || Date.now() > activeToken.expires) {
     return res.json({ ok: false, reason: 'expired' });
   }
+
+  // ----- IN-FLIGHT LOCK -----
+  // If this device already has a request being processed, reject immediately.
+  if (inFlight.has(deviceId)) {
+    console.log('[LOCKED] duplicate in-flight request blocked for', deviceId);
+    return res.json({ ok: false, reason: 'processing' });
+  }
+  inFlight.add(deviceId);
+
+  // Wrap the rest in try/finally so the lock is ALWAYS released,
+  // even if something throws unexpectedly.
+  try {
 
   // ----- GET DEVICE -----
   const { data: device, error: deviceError } = await supabase
@@ -208,6 +230,14 @@ app.post('/api/checkin', async (req, res) => {
   console.log('[SUCCESS]', { userId: finalUser, type: entry.type });
 
   res.json({ ok: true, userId: finalUser, type: entry.type });
+
+  } catch (err) {
+    console.error('[CHECKIN UNHANDLED ERROR]', err);
+    res.json({ ok: false, reason: 'server_error' });
+  } finally {
+    // Always release the lock when done
+    inFlight.delete(deviceId);
+  }
 });
 
 // ============================================
